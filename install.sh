@@ -149,7 +149,11 @@ NIX
 
   networking.networkmanager.enable = true;
   boot.kernelPackages = pkgs.linuxPackages_latest;
-  environment.systemPackages = [ pkgs.git ];
+  environment.systemPackages = [
+    pkgs.git
+    pkgs.age
+    pkgs.sops
+  ];
   nix.settings.experimental-features = [
     "nix-command"
     "flakes"

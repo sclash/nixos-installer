@@ -201,6 +201,8 @@ contains "dotted user quoted" "$C" 'users.users."a.sergi" = {'
 contains "sudo for the user" "$C" '"wheel"'
 contains "git for bootstrap" "$C" 'pkgs.git'
 contains "flakes for bootstrap" "$C" '"flakes"'
+contains "age for first boot" "$C" 'pkgs.age'
+contains "sops for first boot" "$C" 'pkgs.sops'
 lacks "no handoff without dotfiles" "$C" 'first-boot'
 
 DOTFILES_REPO=https://example.org/dots DOTFILES_BRANCH=main
@@ -230,6 +232,8 @@ first_boot_setup() {
   mkdir -p "$H" "$T/bin"
   printf 'repo=https://example.org/dots\nbranch=main\n' >"$T/source"
   LOG="$T/calls.log"
+  KEY="$H/.config/sops/age/keys.txt"
+  SECRETS="$H/.config/sops/secrets.yaml"
   touch "$LOG"
   cat >"$T/bin/git" <<'S'
 #!/usr/bin/env bash
@@ -238,6 +242,24 @@ echo "git $*" >>"$CALLS"
 target="${!#}"
 mkdir -p "$target/.git" "$target/nixos"
 [[ "${NO_BOOTSTRAP:-}" == 1 ]] || printf 'echo bootstrap-ran >>"$CALLS"\nexit ${BOOTSTRAP_EXIT:-0}\n' >"$target/nixos/bootstrap.sh"
+if [[ "${NO_TEMPLATE:-}" != 1 ]]; then
+  mkdir -p "$target/nixos/secrets"
+  printf 'github_pat: null\nopenrouter: null\n' >"$target/nixos/secrets/template.yaml"
+fi
+S
+  cat >"$T/bin/age-keygen" <<'S'
+#!/usr/bin/env bash
+echo "age-keygen $*" >>"$CALLS"
+if [[ "$1" == -o ]]; then echo AGE-SECRET-KEY-NEW >"$2"; exit 0; fi
+echo age1thismachine
+S
+  cat >"$T/bin/sops" <<'S'
+#!/usr/bin/env bash
+echo "sops $*" >>"$CALLS"
+echo "sops ran in $PWD" >>"$CALLS"
+[[ "${SOPS_EXIT:-0}" == 0 ]] || exit "$SOPS_EXIT"
+while (($#)) && [[ "$1" != --output ]]; do shift; done
+cp "$3" "$2"
 S
   cat >"$T/bin/nm-online" <<'S'
 #!/usr/bin/env bash
@@ -259,12 +281,53 @@ contains "clones the chosen branch" "$(<"$LOG")" "git clone --branch main https:
 contains "runs bootstrap" "$(<"$LOG")" "bootstrap-ran"
 check "marks done" "$([[ -e "$H/.local/state/nixos-installer/first-boot-done" ]] && echo yes || echo no)" yes
 
-# Re-running reuses the clone.
+# The machine gets its own key, and secrets from the dotfiles' template.
+check "key mode" "$(stat -c %a "$KEY")" 600
+contains "generates a key" "$(<"$LOG")" "age-keygen -o $KEY"
+contains "encrypts the template to this machine's key" "$(<"$LOG")" \
+  "sops encrypt --age age1thismachine --output $SECRETS $H/dotfiles/nixos/secrets/template.yaml"
+contains "creates it away from any other sops config" "$(<"$LOG")" "sops ran in $H/.config/sops"
+check "secrets mode" "$(stat -c %a "$SECRETS")" 600
+check "names start as null" "$(<"$SECRETS")" $'github_pat: null\nopenrouter: null'
+contains "secrets exist before bootstrap" "$(grep -E 'sops encrypt|bootstrap-ran' "$LOG" | head -1)" "sops encrypt"
+
+# Re-running reuses the clone, and keeps the key and any real credentials.
 : >"$LOG"
+echo 'AGE-SECRET-KEY-CURRENT' >"$KEY"
+echo 'github_pat: REAL-CREDENTIAL' >"$SECRETS"
 first_boot
 check "re-run succeeds" "$RC" 0
 lacks "re-run doesn't clone again" "$(<"$LOG")" "git clone"
 contains "re-run runs bootstrap" "$(<"$LOG")" "bootstrap-ran"
+check "re-run keeps the key" "$(<"$KEY")" "AGE-SECRET-KEY-CURRENT"
+check "re-run keeps the credentials" "$(<"$SECRETS")" "github_pat: REAL-CREDENTIAL"
+lacks "re-run encrypts nothing" "$(<"$LOG")" "sops encrypt"
+
+# A key already here is used for a missing secrets file.
+: >"$LOG"
+rm "$SECRETS"
+first_boot
+check "missing secrets re-run succeeds" "$RC" 0
+lacks "existing key isn't replaced" "$(<"$LOG")" "age-keygen -o"
+check "existing key kept" "$(<"$KEY")" "AGE-SECRET-KEY-CURRENT"
+check "secrets recreated" "$(<"$SECRETS")" $'github_pat: null\nopenrouter: null'
+
+# Dotfiles with no template get neither file.
+first_boot_setup
+first_boot NO_TEMPLATE=1
+check "no template succeeds" "$RC" 0
+check "no template, no key" "$([[ -e "$KEY" ]] && echo yes || echo no)" no
+check "no template, no secrets" "$([[ -e "$SECRETS" ]] && echo yes || echo no)" no
+contains "no template still runs bootstrap" "$(<"$LOG")" "bootstrap-ran"
+
+# Failing to set up secrets stops before bootstrap, and a re-run can retry.
+first_boot_setup
+first_boot SOPS_EXIT=1
+check "failed encrypt exit" "$RC" 1
+contains "failed encrypt explained" "$OUT" "could not create $SECRETS"
+contains "failed encrypt says system is fine" "$OUT" "still plain NixOS"
+lacks "failed encrypt runs no bootstrap" "$(<"$LOG")" "bootstrap-ran"
+check "failed encrypt not marked done" "$([[ -e "$H/.local/state/nixos-installer/first-boot-done" ]] && echo yes || echo no)" no
 
 first_boot_setup
 first_boot GIT_EXIT=1

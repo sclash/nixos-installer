@@ -11,6 +11,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -346,10 +347,17 @@ def scenario_uefi_plain(args, log):
         vm.must("test ! -e ~/.local/state/nixos-installer/first-boot-done")
         vm.must("test -d ~/dotfiles/.git")
         print("    ok: broken dotfiles stop cleanly", flush=True)
-        # Fixed: re-running reuses the clone and finishes.
+        # The machine has its own key and secrets, with the fixture's names as null.
+        vm.must("stat -c %a ~/.config/sops/age/keys.txt", r"^600$")
+        vm.must("stat -c %a ~/.config/sops/secrets.yaml", r"^600$")
+        vm.must("sops -d ~/.config/sops/secrets.yaml", r"first: null\s+second: null")
+        vm.must("sha256sum ~/.config/sops/age/keys.txt ~/.config/sops/secrets.yaml > ~/before")
+        print("    ok: own age key and secrets, names set to null", flush=True)
+        # Fixed: re-running reuses the clone and finishes, keeping both files.
         vm.must("touch ~/fixed")
         vm.must("bash /etc/nixos/first-boot.sh", r"fixture-bootstrap-ran")
         vm.must("test -e ~/.local/state/nixos-installer/first-boot-done")
+        vm.must("sha256sum -c ~/before")
         poweroff(vm)
     finally:
         vm.kill()
@@ -466,14 +474,23 @@ def start_fixture(work):
     (repo / "nixos" / "bootstrap.sh").write_text(
         '[ -e "$HOME/fixed" ] || { echo "fixture: broken"; exit 1; }\n'
         "echo fixture-bootstrap-ran\n")
+    (repo / "nixos" / "secrets").mkdir()
+    (repo / "nixos" / "secrets" / "template.yaml").write_text("first: null\nsecond: null\n")
     git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
     subprocess.run(git + ["add", "."], check=True)
     subprocess.run(git + ["commit", "-qm", "fixture"], check=True)
-    return subprocess.Popen(
+    # Its own session, so stopping it also stops the git-daemon child it starts.
+    daemon = subprocess.Popen(
         ["git", "daemon", "--reuseaddr", "--export-all", "--listen=127.0.0.1",
          "--port=9418", f"--base-path={base}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    # A daemon left over from an earlier run would hold the port and serve its old
+    # fixture, so stop here rather than test the wrong repo.
+    time.sleep(1)
+    if daemon.poll() is not None:
+        sys.exit("git daemon could not start: is another one using port 9418?")
+    return daemon
 
 
 def main():
@@ -500,7 +517,7 @@ def main():
                     print(f"    FAILED: {err}", flush=True)
             print(f"   {results[name]} in {int(time.monotonic() - started)}s", flush=True)
     finally:
-        daemon.kill()
+        os.killpg(daemon.pid, signal.SIGKILL)
     print("\n".join(f"{name}: {result}" for name, result in results.items()))
     sys.exit(0 if all(r == "PASS" for r in results.values()) else 1)
 
