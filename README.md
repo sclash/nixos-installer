@@ -8,12 +8,31 @@ It owns the machine layer: partitions, encryption, swap, hibernate, hardware con
 
 ## Build and flash
 
+Set your default dotfiles repo and branch in `settings.nix`. You can also change them at install time, or leave the repo empty to stop at plain NixOS.
+
+**1. Build the ISO** for the architecture you're on:
+
 ```bash
 nix build .#iso
-sudo dd if=result/iso/*.iso of=/dev/<usb-stick> bs=4M status=progress conv=fsync
+ISO=$(echo result/iso/*.iso)
 ```
 
-Set your default dotfiles repo and branch in `settings.nix`. You can also change them at install time, or leave the repo empty to stop at plain NixOS. Disable Secure Boot in the firmware before booting.
+**2. Find the USB stick.** Plug it in and look for the `disk` row with `usb` under `TRAN`, such as `sdb`. Check its size and model: the next step erases whatever device you name, without asking. Use the whole disk (`sdb`), not a partition (`sdb1`).
+
+```bash
+lsblk -o NAME,SIZE,TYPE,TRAN,MODEL,MOUNTPOINTS
+```
+
+**3. Write the ISO and check the copy.** Replace `sdX` with the stick's name. If `lsblk` shows any of its partitions mounted, unmount each one first with `sudo umount /dev/sdX1`.
+
+```bash
+sudo dd if="$ISO" of=/dev/sdX bs=4M status=progress conv=fsync
+sudo cmp -n "$(stat -Lc %s "$ISO")" "$ISO" /dev/sdX && echo VERIFIED
+```
+
+**4. Boot from it.** Once you see `VERIFIED`, take the stick out and plug it into the new machine. Disable Secure Boot in the firmware, then choose the stick from the firmware's boot menu.
+
+Rebuild and reflash after changing `install.sh`, `first-boot.sh`, `iso.nix` or `settings.nix`. Changes to your dotfiles don't need it, because they're cloned at first boot.
 
 ## What it writes
 
