@@ -1,3 +1,16 @@
+# Nix build output
 result
 result-*
+
+# VM test artifacts, if VM_TEST_WORK points inside the repo
 *.qcow2
+*.vars.fd
+*.log
+tests/work/
+
+# Locally copied ISO images
+*.iso
+
+# Editor/OS noise
+.direnv/
+.DS_Store
