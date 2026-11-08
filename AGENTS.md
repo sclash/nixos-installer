@@ -8,7 +8,7 @@ A lightweight, friendly NixOS installer. You boot the stick, answer a few questi
 
 It owns only the **machine layer**: partitions, encryption, swap, hibernate, hardware configuration, bootloader, hostname, timezone, keyboard layout and the user account. It writes these to `/etc/nixos`. Everything personal belongs to the dotfiles.
 
-The goal behind both repos is one personal setup on any machine, and the two-layer split is described in the dotfiles' `AGENTS.md` (`~/dotfiles/AGENTS.md`). This guide only adds what's specific to the installer.
+The goal behind both repos is one personal setup on any machine, and the two-layer split is described in the dotfiles' [`AGENTS.md`](https://github.com/sclash/dotfiles/blob/quickshell/AGENTS.md). This guide only adds what's specific to the installer.
 
 ## Hard rules
 
@@ -86,4 +86,4 @@ The scenarios are `refusals`, `interactive`, `uefi-plain`, `uefi-luks-hibernate`
 ## Where to read more
 
 - `README.md`: building and flashing the stick, what the installer writes, and the dotfiles contract.
-- `~/dotfiles/AGENTS.md`: the shared philosophy and the dotfiles' rules.
+- The dotfiles' [`AGENTS.md`](https://github.com/sclash/dotfiles/blob/quickshell/AGENTS.md): the shared philosophy, the dotfiles' rules, and the list of what this installer relies on there.
